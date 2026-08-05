@@ -1294,6 +1294,7 @@ function render() {
   $("correlationValue").textContent = cfg.correlation.toFixed(2);
 
   $("reportTitle").textContent = name + " sample-size planning";
+  document.title = name + " sample-size planning";
   $("reportPurpose").textContent =
     "A comparison of standard and matched-pair AB/BA crossover designs for detecting a change in " + name.toLowerCase() + ".";
   $("dataLead").textContent =
