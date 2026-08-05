@@ -202,8 +202,36 @@ math[display="block"] { margin: 0.5rem 0 0.6rem; }
 .chart-title-center { margin: 0.6rem 0 0.1rem; text-align: center; font-size: 0.8rem; font-weight: 700; color: var(--ink); }
 .chart-sub { margin: 0.15rem 0 0.35rem; color: var(--muted); font-size: 0.69rem; }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 0.25rem 1.4rem; margin: 0.35rem 0 0.2rem; font-size: 0.69rem; color: #3d4842; }
-.chart-legend .item { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.chart-legend .item { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; cursor: pointer; user-select: none; }
+.chart-legend .item.off { opacity: 0.32; }
 .chart svg { display: block; width: 100%; height: auto; }
+.chart svg.interactive { cursor: crosshair; }
+.chart-caption { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.7rem; }
+
+.tt {
+  position: fixed; z-index: 60; pointer-events: none; opacity: 0; left: 0; top: 0;
+  padding: 0.45rem 0.6rem; border: 1px solid var(--rule); border-radius: 5px;
+  background: rgba(255,255,255,0.97); box-shadow: 0 2px 9px rgba(24,32,28,0.15);
+  font-size: 0.75rem; line-height: 1.4; color: var(--ink); white-space: nowrap;
+  transition: opacity 0.08s;
+}
+.tt.show { opacity: 1; }
+.tt-head { font-weight: 700; margin-bottom: 0.22rem; }
+.tt-row { display: flex; align-items: center; gap: 0.45rem; }
+.tt-row .sw { width: 10px; height: 3px; border-radius: 1px; flex: none; }
+.tt-row .tt-val { margin-left: auto; padding-left: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.results-grid tbody tr { cursor: pointer; }
+.results-grid tbody tr:hover td { background: #f6f5f1; }
+.results-grid tbody tr.live:hover td { background: #e7efe9; }
+.table-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.15rem 0 0.55rem; }
+.btn {
+  font: inherit; font-size: 0.74rem; font-weight: 650; color: var(--green);
+  padding: 0.32rem 0.66rem; border: 1px solid #c4ccc7; border-radius: 4px;
+  background: #fff; cursor: pointer;
+}
+.btn:hover { background: var(--green-soft); border-color: var(--green); }
+.hint { margin: 0.15rem 0 0.5rem; color: var(--muted); font-size: 0.72rem; }
 
 @media (max-width: 620px) {
   .report-shell { padding: 1.5rem 0.85rem 2.5rem; }
@@ -212,6 +240,7 @@ math[display="block"] { margin: 0.5rem 0 0.6rem; }
 @media print {
   .report-shell { max-width: none; padding: 0.35in 0.45in; }
   .controls-block { background: #fff; }
+  .table-actions, .hint, .tt { display: none; }
 }
 </style>
 </head>
@@ -452,6 +481,10 @@ math[display="block"] { margin: 0.5rem 0 0.6rem; }
           <span class="slider-value" id="correlationValue">0.50</span>
         </div>
       </div>
+      <div class="table-actions" style="margin-top:0.9rem;">
+        <button type="button" class="btn" id="btnShare">Copy link to these settings</button>
+        <button type="button" class="btn" id="btnReset">Reset to defaults</button>
+      </div>
     </div>
   </div>
 
@@ -462,6 +495,10 @@ math[display="block"] { margin: 0.5rem 0 0.6rem; }
   <div class="assumption-strip" id="assumptionStrip"></div>
   <div class="cards" id="cards"></div>
 
+  <div class="table-heading">Power against number of herds</div>
+  <p class="hint" id="powerLead"></p>
+  <div class="chart" id="powerChart"></div>
+
   <div class="data-section" style="margin-top:2.8rem;">
     <h2 class="data-title">How sample size moves with the difference and alpha</h2>
     <p class="data-lead" id="appendixLead"></p>
@@ -470,6 +507,11 @@ math[display="block"] { margin: 0.5rem 0 0.6rem; }
   <div class="chart" id="resultsChart"></div>
 
   <div class="table-heading" id="resultsTableHeading"></div>
+  <div class="table-actions">
+    <button type="button" class="btn" id="btnCopyTable">Copy table</button>
+    <button type="button" class="btn" id="btnDownloadCsv">Download CSV</button>
+  </div>
+  <p class="hint">Click any row to load that difference and alpha into the controls above.</p>
   <div class="report-table-wrap">
     <table class="report-table results-grid">
       <colgroup>
@@ -769,6 +811,8 @@ function makeModel(cfg) {
   }
 
   return {
+    standardPower: standardPower,
+    matchedPower: matchedPower,
     row(effect, alpha) {
       const standardComplete = search(standardPower, effect, alpha);
       const matchedComplete = search(matchedPower, effect, alpha);
@@ -810,12 +854,85 @@ function niceTicks(min, max, count) {
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAY_MS = 86400000;
 
-function renderDailyChart(container, outcome) {
+const tip = document.createElement("div");
+tip.className = "tt";
+document.body.appendChild(tip);
+
+function showTip(html, evt) {
+  tip.innerHTML = html;
+  tip.classList.add("show");
+  const r = tip.getBoundingClientRect();
+  let x = evt.clientX + 16, y = evt.clientY + 16;
+  if (x + r.width > window.innerWidth - 8) x = evt.clientX - r.width - 16;
+  if (y + r.height > window.innerHeight - 8) y = evt.clientY - r.height - 16;
+  tip.style.left = Math.max(8, x) + "px";
+  tip.style.top = Math.max(8, y) + "px";
+}
+function hideTip() { tip.classList.remove("show"); }
+
+function tipRow(color, label, value, dash) {
+  const sw = color
+    ? '<span class="sw" style="background:' + color + (dash ? ";opacity:0.85" : "") + '"></span>'
+    : "";
+  return '<div class="tt-row">' + sw + "<span>" + label + '</span><span class="tt-val">' + value + "</span></div>";
+}
+
+// Series hidden via legend clicks, keyed by chart.
+const hiddenSeries = { daily: new Set(), results: new Set(), power: new Set() };
+
+function buildLegend(container, items, group, columns) {
+  const legend = document.createElement("div");
+  legend.className = "chart-legend";
+  if (columns) {
+    legend.style.display = "grid";
+    legend.style.gridTemplateColumns = "repeat(" + columns + ", minmax(0, max-content))";
+  }
+  items.forEach(item => {
+    const span = document.createElement("span");
+    span.className = "item" + (hiddenSeries[group].has(item.key) ? " off" : "");
+    span.title = "Click to show or hide this series";
+    span.innerHTML = '<svg width="' + (columns ? 26 : 18) + '" height="8"><line x1="0" y1="4" x2="' +
+      (columns ? 26 : 18) + '" y2="4" stroke="' + item.color + '" stroke-width="2.4"' +
+      (item.dash ? ' stroke-dasharray="' + item.dash + '"' : "") + "></line></svg>" + item.label;
+    span.addEventListener("click", () => {
+      if (hiddenSeries[group].has(item.key)) hiddenSeries[group].delete(item.key);
+      else hiddenSeries[group].add(item.key);
+      render();
+    });
+    legend.appendChild(span);
+  });
+  container.appendChild(legend);
+}
+
+function svgCoords(evt, svg, W, H) {
+  const r = svg.getBoundingClientRect();
+  return { x: (evt.clientX - r.left) * W / r.width, y: (evt.clientY - r.top) * H / r.height };
+}
+
+function nearestIndex(pts, t) {
+  let lo = 0, hi = pts.length - 1;
+  if (hi < 0) return -1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid][0] < t) lo = mid; else hi = mid;
+  }
+  return Math.abs(pts[lo][0] - t) <= Math.abs(pts[hi][0] - t) ? lo : hi;
+}
+
+function formatDate(ms) {
+  const d = new Date(ms);
+  return d.getUTCDate() + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCFullYear();
+}
+
+function renderDailyChart(container, cfg) {
+  const outcome = cfg.outcome;
   const name = DATA.outcomeNames[outcome];
   const seriesMap = DATA.series[outcome];
   const names = ["Dairy A", "Dairy B"];
   const colors = { "Dairy A": "#286044", "Dairy B": "#8a6d3b" };
+  const visible = names.filter(n => !hiddenSeries.daily.has(n));
   const W = 900, H = 300, m = { top: 8, right: 12, bottom: 26, left: 46 };
   const iw = W - m.left - m.right, ih = H - m.top - m.bottom;
 
@@ -823,6 +940,8 @@ function renderDailyChart(container, outcome) {
   names.forEach(n => (seriesMap[n] || []).forEach(p => {
     if (p[0] < xMin) xMin = p[0];
     if (p[0] > xMax) xMax = p[0];
+  }));
+  (visible.length ? visible : names).forEach(n => (seriesMap[n] || []).forEach(p => {
     if (p[1] < yMin) yMin = p[1];
     if (p[1] > yMax) yMax = p[1];
   }));
@@ -836,14 +955,30 @@ function renderDailyChart(container, outcome) {
   head.className = "chart-title-center";
   head.textContent = "Daily " + name.toLowerCase();
   container.appendChild(head);
-  const legend = document.createElement("div");
-  legend.className = "chart-legend";
-  legend.innerHTML = names.map(n =>
-    '<span class="item"><svg width="18" height="8"><line x1="0" y1="4" x2="18" y2="4" stroke="' +
-    colors[n] + '" stroke-width="2.4"></line></svg>' + n + "</span>").join("");
-  container.appendChild(legend);
+  buildLegend(container, names.map(n => ({ key: n, label: n, color: colors[n] })), "daily");
 
-  const svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Daily " + name.toLowerCase() });
+  const svg = el("svg", { viewBox: "0 0 " + W + " " + H, class: "interactive",
+    role: "img", "aria-label": "Daily " + name.toLowerCase() });
+
+  // Example treatment window, drawn behind the data.
+  const winStart = xMin + 14 * DAY_MS;
+  const p1End = winStart + cfg.periodDays * DAY_MS;
+  const gapEnd = p1End + cfg.gapDays * DAY_MS;
+  const p2End = gapEnd + cfg.periodDays * DAY_MS;
+  if (p2End <= xMax) {
+    const band = (a, b, fill, label) => {
+      svg.appendChild(el("rect", { x: sx(a), y: m.top, width: sx(b) - sx(a), height: ih, fill: fill }));
+      svg.appendChild(el("text", Object.assign({ x: (sx(a) + sx(b)) / 2, y: m.top + 11, "text-anchor": "middle" },
+        AXIS_LABEL, { "font-size": "8.5", fill: "#5d6862" }), label));
+    };
+    band(winStart, p1End, "rgba(40,96,68,0.09)", "Period 1");
+    band(p1End, gapEnd, "rgba(120,130,124,0.10)", "washout");
+    band(gapEnd, p2End, "rgba(40,96,68,0.09)", "Period 2");
+    [winStart, p1End, gapEnd, p2End].forEach(d => {
+      svg.appendChild(el("line", { x1: sx(d), y1: m.top, x2: sx(d), y2: m.top + ih,
+        stroke: "#9fb3a8", "stroke-width": 0.8, "stroke-dasharray": "3 3" }));
+    });
+  }
 
   niceTicks(yMin, yMax, 8).forEach(v => {
     if (v < yMin || v > yMax) return;
@@ -869,7 +1004,7 @@ function renderDailyChart(container, outcome) {
   svg.appendChild(el("text", Object.assign({ x: 12, y: m.top + ih / 2, "text-anchor": "middle",
     transform: "rotate(-90 12 " + (m.top + ih / 2) + ")" }, AXIS_TITLE), name));
 
-  names.forEach(n => {
+  visible.forEach(n => {
     const pts = seriesMap[n] || [];
     if (!pts.length) return;
     const d = pts.map((p, i) => (i ? "L" : "M") + sx(p[0]).toFixed(2) + " " + sy(p[1]).toFixed(2)).join(" ");
@@ -877,28 +1012,82 @@ function renderDailyChart(container, outcome) {
       "stroke-linejoin": "round", "stroke-linecap": "round" }));
   });
 
+  const crosshair = el("line", { y1: m.top, y2: m.top + ih, stroke: "#5d6862", "stroke-width": 0.9,
+    "stroke-dasharray": "3 3", opacity: 0 });
+  svg.appendChild(crosshair);
+  const markers = visible.map(n => {
+    const c = el("circle", { r: 3.6, fill: "#fff", stroke: colors[n], "stroke-width": 2, opacity: 0 });
+    svg.appendChild(c);
+    return { name: n, node: c };
+  });
+
+  svg.addEventListener("mousemove", evt => {
+    const p = svgCoords(evt, svg, W, H);
+    if (p.x < m.left || p.x > m.left + iw || !visible.length) {
+      hideTip(); crosshair.setAttribute("opacity", 0);
+      markers.forEach(mk => mk.node.setAttribute("opacity", 0));
+      return;
+    }
+    const target = xMin + (p.x - m.left) / iw * (xMax - xMin);
+    const first = seriesMap[visible[0]] || [];
+    const idx = nearestIndex(first, target);
+    if (idx < 0) return;
+    const stamp = first[idx][0];
+    crosshair.setAttribute("x1", sx(stamp));
+    crosshair.setAttribute("x2", sx(stamp));
+    crosshair.setAttribute("opacity", 1);
+    let html = '<div class="tt-head">' + formatDate(stamp) + "</div>";
+    markers.forEach(mk => {
+      const pts = seriesMap[mk.name] || [];
+      const j = nearestIndex(pts, stamp);
+      if (j < 0 || Math.abs(pts[j][0] - stamp) > DAY_MS) { mk.node.setAttribute("opacity", 0); return; }
+      mk.node.setAttribute("cx", sx(pts[j][0]));
+      mk.node.setAttribute("cy", sy(pts[j][1]));
+      mk.node.setAttribute("opacity", 1);
+      html += tipRow(colors[mk.name], mk.name, pts[j][1].toFixed(2));
+    });
+    showTip(html, evt);
+  });
+  svg.addEventListener("mouseleave", () => {
+    hideTip();
+    crosshair.setAttribute("opacity", 0);
+    markers.forEach(mk => mk.node.setAttribute("opacity", 0));
+  });
+
   container.appendChild(svg);
+  if (p2End <= xMax) {
+    const caption = document.createElement("p");
+    caption.className = "chart-caption";
+    caption.textContent = "Shaded bands show one example " + cfg.periodDays + "-day period / " +
+      cfg.gapDays + "-day washout / " + cfg.periodDays + "-day period window.";
+    container.appendChild(caption);
+  }
 }
 
 function renderResultsChart(container, rows, cfg) {
   const seriesDefs = [];
   ["Standard crossover", "Matched crossover"].forEach(design => {
     ALPHA_GRID.forEach(alpha => {
+      const label = design + ", \u03b1 = " + alpha.toFixed(2);
       seriesDefs.push({
+        key: label,
         design: design,
         alpha: alpha,
-        label: design + ", \u03b1 = " + alpha.toFixed(2),
+        label: label,
         color: design === "Standard crossover" ? "#1b4f72" : "#c8621a",
         dash: alpha === 0.05 ? null : "6 4"
       });
     });
   });
   const valueOf = (row, design) => design === "Standard crossover" ? row.standardEnroll : row.matchedEnroll;
+  const visible = seriesDefs.filter(s => !hiddenSeries.results.has(s.key));
 
   const W = 900, H = 280, m = { top: 10, right: 14, bottom: 40, left: 52 };
   const iw = W - m.left - m.right, ih = H - m.top - m.bottom;
   let yMax = 0;
-  rows.forEach(r => { yMax = Math.max(yMax, r.standardEnroll, r.matchedEnroll); });
+  (visible.length ? visible : seriesDefs).forEach(s => rows.forEach(r => {
+    if (Math.abs(r.alpha - s.alpha) < 1e-9) yMax = Math.max(yMax, valueOf(r, s.design));
+  }));
   const yTicks = niceTicks(0, yMax, 8);
   const yTop = Math.max(yTicks[yTicks.length - 1], yMax);
   const xMin = EFFECT_GRID[0], xMax = EFFECT_GRID[EFFECT_GRID.length - 1];
@@ -913,18 +1102,10 @@ function renderResultsChart(container, rows, cfg) {
     '<div class="chart-sub">' + DATA.outcomeNames[cfg.outcome] + " \u00b7 " + cfg.methodLabel +
     " calculation \u00b7 matched pairs assume correlation " + cfg.correlation.toFixed(2) + "</div>";
   container.appendChild(head);
+  buildLegend(container, seriesDefs, "results", 2);
 
-  const legend = document.createElement("div");
-  legend.className = "chart-legend";
-  legend.style.display = "grid";
-  legend.style.gridTemplateColumns = "repeat(2, minmax(0, max-content))";
-  legend.innerHTML = seriesDefs.map(s =>
-    '<span class="item"><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="' + s.color +
-    '" stroke-width="2.4"' + (s.dash ? ' stroke-dasharray="' + s.dash + '"' : "") + "></line></svg>" +
-    s.label + "</span>").join("");
-  container.appendChild(legend);
-
-  const svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": "Herds to enroll by difference to detect" });
+  const svg = el("svg", { viewBox: "0 0 " + W + " " + H, class: "interactive",
+    role: "img", "aria-label": "Herds to enroll by difference to detect" });
 
   yTicks.forEach(v => {
     svg.appendChild(el("line", { x1: m.left, y1: sy(v), x2: m.left + iw, y2: sy(v), stroke: "#e8ece9" }));
@@ -941,7 +1122,7 @@ function renderResultsChart(container, rows, cfg) {
   svg.appendChild(el("text", Object.assign({ x: 13, y: m.top + ih / 2, "text-anchor": "middle",
     transform: "rotate(-90 13 " + (m.top + ih / 2) + ")" }, AXIS_TITLE), "Herds to enroll"));
 
-  seriesDefs.forEach(s => {
+  visible.forEach(s => {
     const pts = EFFECT_GRID.map(e => {
       const row = rows.find(r => Math.abs(r.effect - e) < 1e-9 && Math.abs(r.alpha - s.alpha) < 1e-9);
       return [e, valueOf(row, s.design)];
@@ -952,12 +1133,126 @@ function renderResultsChart(container, rows, cfg) {
     });
     if (s.dash) path.setAttribute("stroke-dasharray", s.dash);
     svg.appendChild(path);
-    pts.forEach(p => {
-      const dot = el("circle", { cx: sx(p[0]), cy: sy(p[1]), r: 4.1, fill: s.color });
-      dot.appendChild(el("title", {}, s.label + " \u2014 difference " + p[0].toFixed(2) + ": " + p[1] + " herds to enroll"));
-      svg.appendChild(dot);
-    });
+    pts.forEach(p => svg.appendChild(el("circle", { cx: sx(p[0]), cy: sy(p[1]), r: 4.1, fill: s.color })));
   });
+
+  const focus = el("circle", { r: 6.4, fill: "none", stroke: "#18201c", "stroke-width": 1.4, opacity: 0 });
+  svg.appendChild(focus);
+
+  svg.addEventListener("mousemove", evt => {
+    const p = svgCoords(evt, svg, W, H);
+    let best = null, bestDist = Infinity;
+    visible.forEach(s => EFFECT_GRID.forEach(e => {
+      const row = rows.find(r => Math.abs(r.effect - e) < 1e-9 && Math.abs(r.alpha - s.alpha) < 1e-9);
+      const v = valueOf(row, s.design);
+      const d = Math.hypot(sx(e) - p.x, sy(v) - p.y);
+      if (d < bestDist) { bestDist = d; best = { s: s, e: e, v: v, row: row }; }
+    }));
+    if (!best || bestDist > 26) { hideTip(); focus.setAttribute("opacity", 0); return; }
+    focus.setAttribute("cx", sx(best.e));
+    focus.setAttribute("cy", sy(best.v));
+    focus.setAttribute("opacity", 1);
+    const isStandard = best.s.design === "Standard crossover";
+    let html = '<div class="tt-head">Difference ' + best.e.toFixed(2) + " \u00b7 \u03b1 = " + best.s.alpha.toFixed(2) + "</div>";
+    html += tipRow(best.s.color, best.s.design, "");
+    html += tipRow(null, "Enroll", isStandard ? best.row.standardEnroll + " herds"
+      : best.row.matchedEnrollPairs + " pairs (" + best.row.matchedEnroll + ")");
+    html += tipRow(null, "Complete", isStandard ? best.row.standardComplete + " herds"
+      : best.row.matchedCompletePairs + " pairs (" + best.row.matchedComplete + ")");
+    showTip(html, evt);
+  });
+  svg.addEventListener("mouseleave", () => { hideTip(); focus.setAttribute("opacity", 0); });
+
+  container.appendChild(svg);
+}
+
+function renderPowerChart(container, model, cfg, live) {
+  const defs = [
+    { key: "Standard", label: "Standard crossover", color: "#1b4f72",
+      fn: model.standardPower, required: live.standardComplete },
+    { key: "Matched", label: "Matched crossover", color: "#c8621a",
+      fn: model.matchedPower, required: live.matchedComplete }
+  ];
+  const visible = defs.filter(d => !hiddenSeries.power.has(d.key));
+  const maxRequired = Math.max(live.standardComplete, live.matchedComplete);
+  const xTop = Math.max(24, Math.ceil(maxRequired * 1.5 / 2) * 2);
+
+  const W = 900, H = 260, m = { top: 10, right: 14, bottom: 40, left: 52 };
+  const iw = W - m.left - m.right, ih = H - m.top - m.bottom;
+  const sx = v => m.left + (v - 4) / (xTop - 4) * iw;
+  const sy = v => m.top + ih - v * ih;
+
+  const curves = defs.map(d => {
+    const pts = [];
+    for (let n = 4; n <= xTop; n += 2) pts.push([n, Math.min(1, Math.max(0, d.fn(n, cfg.effect, cfg.alpha)))]);
+    return { def: d, pts: pts };
+  });
+
+  container.innerHTML = "";
+  buildLegend(container, defs.map(d => ({ key: d.key, label: d.label, color: d.color })), "power");
+
+  const svg = el("svg", { viewBox: "0 0 " + W + " " + H, class: "interactive",
+    role: "img", "aria-label": "Power against number of herds" });
+
+  [0, 0.2, 0.4, 0.6, 0.8, 1].forEach(v => {
+    svg.appendChild(el("line", { x1: m.left, y1: sy(v), x2: m.left + iw, y2: sy(v), stroke: "#e8ece9" }));
+    svg.appendChild(el("text", Object.assign({ x: m.left - 7, y: sy(v) + 3.5, "text-anchor": "end" }, AXIS_LABEL),
+      Math.round(v * 100) + "%"));
+  });
+  niceTicks(4, xTop, 8).forEach(v => {
+    if (v < 4 || v > xTop) return;
+    svg.appendChild(el("text", Object.assign({ x: sx(v), y: H - 20, "text-anchor": "middle" }, AXIS_LABEL), String(v)));
+    svg.appendChild(el("line", { x1: sx(v), y1: m.top + ih, x2: sx(v), y2: m.top + ih + 4, stroke: "#b8c1bb" }));
+  });
+  svg.appendChild(el("line", { x1: m.left, y1: m.top + ih, x2: m.left + iw, y2: m.top + ih, stroke: "#b8c1bb" }));
+  svg.appendChild(el("line", { x1: m.left, y1: m.top, x2: m.left, y2: m.top + ih, stroke: "#b8c1bb" }));
+  svg.appendChild(el("text", Object.assign({ x: m.left + iw / 2, y: H - 4, "text-anchor": "middle" }, AXIS_TITLE),
+    "Herds completing the study"));
+  svg.appendChild(el("text", Object.assign({ x: 13, y: m.top + ih / 2, "text-anchor": "middle",
+    transform: "rotate(-90 13 " + (m.top + ih / 2) + ")" }, AXIS_TITLE), "Power"));
+
+  svg.appendChild(el("line", { x1: m.left, y1: sy(cfg.targetPower), x2: m.left + iw, y2: sy(cfg.targetPower),
+    stroke: "#5d6862", "stroke-width": 1, "stroke-dasharray": "5 4" }));
+  svg.appendChild(el("text", Object.assign({ x: m.left + iw - 3, y: sy(cfg.targetPower) - 5, "text-anchor": "end" },
+    AXIS_LABEL, { fill: "#5d6862" }), "target " + pct(cfg.targetPower)));
+
+  curves.forEach(c => {
+    if (hiddenSeries.power.has(c.def.key)) return;
+    svg.appendChild(el("path", {
+      d: c.pts.map((p, i) => (i ? "L" : "M") + sx(p[0]).toFixed(2) + " " + sy(p[1]).toFixed(2)).join(" "),
+      fill: "none", stroke: c.def.color, "stroke-width": 2.1, "stroke-linejoin": "round"
+    }));
+    if (c.def.required <= xTop) {
+      svg.appendChild(el("line", { x1: sx(c.def.required), y1: sy(0), x2: sx(c.def.required),
+        y2: sy(cfg.targetPower), stroke: c.def.color, "stroke-width": 1, "stroke-dasharray": "3 3", opacity: 0.65 }));
+      svg.appendChild(el("circle", { cx: sx(c.def.required), cy: sy(cfg.targetPower), r: 4.6,
+        fill: "#fff", stroke: c.def.color, "stroke-width": 2.2 }));
+      svg.appendChild(el("text", Object.assign({ x: sx(c.def.required), y: sy(0) + 14, "text-anchor": "middle" },
+        AXIS_LABEL, { fill: c.def.color, "font-weight": "700" }), String(c.def.required)));
+    }
+  });
+
+  const guide = el("line", { y1: m.top, y2: m.top + ih, stroke: "#5d6862", "stroke-width": 0.9,
+    "stroke-dasharray": "3 3", opacity: 0 });
+  svg.appendChild(guide);
+
+  svg.addEventListener("mousemove", evt => {
+    const p = svgCoords(evt, svg, W, H);
+    if (p.x < m.left || p.x > m.left + iw || !visible.length) { hideTip(); guide.setAttribute("opacity", 0); return; }
+    let n = Math.round((4 + (p.x - m.left) / iw * (xTop - 4)) / 2) * 2;
+    n = Math.min(Math.max(n, 4), xTop);
+    guide.setAttribute("x1", sx(n));
+    guide.setAttribute("x2", sx(n));
+    guide.setAttribute("opacity", 1);
+    let html = '<div class="tt-head">' + n + " herds completing</div>";
+    curves.forEach(c => {
+      if (hiddenSeries.power.has(c.def.key)) return;
+      const hit = c.pts[(n - 4) / 2];
+      if (hit) html += tipRow(c.def.color, c.def.label, (hit[1] * 100).toFixed(1) + "%");
+    });
+    showTip(html, evt);
+  });
+  svg.addEventListener("mouseleave", () => { hideTip(); guide.setAttribute("opacity", 0); });
 
   container.appendChild(svg);
 }
@@ -1006,7 +1301,7 @@ function render() {
     "and untreated movement between treatment-length periods.";
   $("dailyAvgHead").textContent = "Average " + name.toLowerCase();
 
-  renderDailyChart($("dailyChart"), cfg.outcome);
+  renderDailyChart($("dailyChart"), cfg);
 
   const stats = DATA.dailyStats[cfg.outcome];
   $("dailyTableBody").innerHTML = ["Dairy A", "Dairy B"].map(d =>
@@ -1056,6 +1351,12 @@ function render() {
       '<div class="sub2">' + live.matchedCompletePairs + " pairs / " + live.matchedComplete +
       " herds expected to complete</div></div>";
 
+  $("powerLead").textContent =
+    "Power for a " + cfg.effect.toFixed(2) + " " + unit + " difference at \u03b1 = " + cfg.alpha.toFixed(2) +
+    ", as the number of completing herds grows. Circles mark the smallest herd count reaching " +
+    pct(cfg.targetPower) + " power.";
+  renderPowerChart($("powerChart"), model, cfg, live);
+
   $("appendixLead").innerHTML =
     "The same calculation repeated across four candidate differences and two significance levels, holding every " +
     "other assumption at the settings above. Your current selection (" + cfg.effect.toFixed(2) + " " + unit +
@@ -1068,7 +1369,9 @@ function render() {
     const classes = [];
     if (i % ALPHA_GRID.length === 0 && i > 0) classes.push("block-start");
     if (Math.abs(r.effect - cfg.effect) < 1e-9 && Math.abs(r.alpha - cfg.alpha) < 1e-9) classes.push("live");
-    return "<tr" + (classes.length ? ' class="' + classes.join(" ") + '"' : "") + ">" +
+    return "<tr" + (classes.length ? ' class="' + classes.join(" ") + '"' : "") +
+      ' data-effect="' + r.effect.toFixed(2) + '" data-alpha="' + r.alpha.toFixed(2) +
+      '" title="Click to load these settings">' +
       "<td><strong>" + r.effect.toFixed(2) + "</strong></td>" +
       '<td class="num">' + r.alpha.toFixed(2) + "</td>" +
       '<td class="num grp">' + r.standardComplete + "</td>" +
@@ -1076,6 +1379,8 @@ function render() {
       '<td class="num grp">' + r.matchedCompletePairs + " (" + r.matchedComplete + ")</td>" +
       '<td class="num key">' + r.matchedEnrollPairs + " (" + r.matchedEnroll + ")</td></tr>";
   }).join("");
+  lastRows = rows;
+  lastCfg = cfg;
 
   $("resultsNotes").innerHTML =
     "<strong>Complete</strong> = available for the final analysis; <strong>enroll</strong> = budget target after the " +
@@ -1085,16 +1390,117 @@ function render() {
     "&times;), " + pct(cfg.targetPower) + " power, " + (cfg.direction === "one-sided" ? "one-sided" : "two-sided") +
     " test, and a matching correlation of " + cfg.correlation.toFixed(2) +
     " selected for planning rather than estimated from Dairy A and Dairy B.";
+
+  writeState();
 }
 
-["outcome", "periodGap", "season", "direction", "power", "alpha", "effect", "method", "multiplier", "herdLoss", "correlation"]
-  .forEach(id => {
-    const node = $(id);
-    node.addEventListener("change", render);
-    node.addEventListener("input", render);
-  });
+/* ---------- state in the URL ---------- */
+const STATE_KEYS = {
+  outcome: "o", periodGap: "pg", season: "s", direction: "d", power: "pw",
+  alpha: "a", effect: "e", method: "m", multiplier: "mx", herdLoss: "hl", correlation: "r"
+};
+const CONTROL_IDS = Object.keys(STATE_KEYS);
+const DEFAULTS = {};
 
+function writeState() {
+  const parts = CONTROL_IDS.map(id => STATE_KEYS[id] + "=" + encodeURIComponent($(id).value));
+  const hash = "#" + parts.join("&");
+  if (location.hash === hash) return;
+  try { history.replaceState(null, "", hash); } catch (err) { /* file:// may block this */ }
+}
+
+function readState() {
+  if (!location.hash || location.hash.length < 2) return;
+  const params = new URLSearchParams(location.hash.slice(1));
+  CONTROL_IDS.forEach(id => {
+    const value = params.get(STATE_KEYS[id]);
+    if (value === null) return;
+    const node = $(id);
+    if (node.tagName === "SELECT" && !Array.prototype.some.call(node.options, o => o.value === value)) return;
+    node.value = value;
+  });
+}
+
+/* ---------- export helpers ---------- */
+let lastRows = [], lastCfg = null;
+
+function tableMatrix() {
+  const header = ["Difference", "Alpha", "Standard complete herds", "Standard enroll herds",
+    "Matched complete pairs", "Matched complete herds", "Matched enroll pairs", "Matched enroll herds"];
+  const body = lastRows.map(r => [r.effect.toFixed(2), r.alpha.toFixed(2), r.standardComplete,
+    r.standardEnroll, r.matchedCompletePairs, r.matchedComplete, r.matchedEnrollPairs, r.matchedEnroll]);
+  return [header].concat(body);
+}
+
+async function copyText(text, btn) {
+  const label = btn.textContent;
+  let ok = true;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
+    document.body.appendChild(area);
+    area.select();
+    try { ok = document.execCommand("copy"); } catch (err2) { ok = false; }
+    document.body.removeChild(area);
+  }
+  btn.textContent = ok ? "Copied" : "Copy failed";
+  setTimeout(() => { btn.textContent = label; }, 1500);
+}
+
+$("btnCopyTable").addEventListener("click", evt => {
+  copyText(tableMatrix().map(row => row.join("\t")).join("\n"), evt.currentTarget);
+});
+
+$("btnDownloadCsv").addEventListener("click", () => {
+  const csv = tableMatrix().map(row => row.join(",")).join("\r\n");
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "sample_size_" + lastCfg.outcome + "_power" + Math.round(lastCfg.targetPower * 100) +
+    "_" + lastCfg.method + ".csv";
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 500);
+});
+
+$("btnShare").addEventListener("click", evt => {
+  writeState();
+  copyText(location.href, evt.currentTarget);
+});
+
+$("btnReset").addEventListener("click", () => {
+  CONTROL_IDS.forEach(id => { $(id).value = DEFAULTS[id]; });
+  hiddenSeries.daily.clear();
+  hiddenSeries.results.clear();
+  hiddenSeries.power.clear();
+  render();
+});
+
+$("resultsTableBody").addEventListener("click", evt => {
+  const row = evt.target.closest("tr");
+  if (!row || !row.dataset.effect) return;
+  $("effect").value = row.dataset.effect;
+  $("alpha").value = row.dataset.alpha;
+  render();
+});
+
+CONTROL_IDS.forEach(id => {
+  const node = $(id);
+  DEFAULTS[id] = node.value;
+  node.addEventListener("change", render);
+  node.addEventListener("input", render);
+});
+
+readState();
 render();
+
+/* Browsers restore previously entered control values on same-document reloads,
+   which lands after this script runs and would override a shared link. */
+window.addEventListener("pageshow", () => { readState(); render(); });
+window.addEventListener("hashchange", () => { readState(); render(); });
 </script>
 </body>
 </html>
