@@ -238,9 +238,14 @@ math[display="block"] { margin: 0.5rem 0 0.6rem; }
   .control input[type="range"] { width: 150px; }
 }
 @media print {
-  .report-shell { max-width: none; padding: 0.35in 0.45in; }
-  .controls-block { background: #fff; }
-  .table-actions, .hint, .tt { display: none; }
+  @page { size: A4 landscape; margin: 10mm; }
+  html, body { background: #fff; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .report-shell { max-width: none; padding: 0; }
+  .controls-block, .table-actions, .hint, .tt, .chart-legend .item.off { display: none; }
+  .chart, .cards, table, .assumption-strip { break-inside: avoid; page-break-inside: avoid; }
+  h2, .table-heading, .data-title { break-after: avoid; page-break-after: avoid; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
 }
 </style>
 </head>
@@ -484,6 +489,7 @@ math[display="block"] { margin: 0.5rem 0 0.6rem; }
       <div class="table-actions" style="margin-top:0.9rem;">
         <button type="button" class="btn" id="btnShare">Copy link to these settings</button>
         <button type="button" class="btn" id="btnReset">Reset to defaults</button>
+        <button type="button" class="btn" id="btnPdf">Save as PDF</button>
       </div>
     </div>
   </div>
@@ -509,7 +515,7 @@ math[display="block"] { margin: 0.5rem 0 0.6rem; }
   <div class="table-heading" id="resultsTableHeading"></div>
   <div class="table-actions">
     <button type="button" class="btn" id="btnCopyTable">Copy table</button>
-    <button type="button" class="btn" id="btnDownloadCsv">Download CSV</button>
+    <button type="button" class="btn" id="btnPdfTable">Save as PDF</button>
   </div>
   <p class="hint">Click any row to load that difference and alpha into the controls above.</p>
   <div class="report-table-wrap">
@@ -1455,17 +1461,22 @@ $("btnCopyTable").addEventListener("click", evt => {
   copyText(tableMatrix().map(row => row.join("\t")).join("\n"), evt.currentTarget);
 });
 
-$("btnDownloadCsv").addEventListener("click", () => {
-  const csv = tableMatrix().map(row => row.join(",")).join("\r\n");
-  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = "sample_size_" + lastCfg.outcome + "_power" + Math.round(lastCfg.targetPower * 100) +
-    "_" + lastCfg.method + ".csv";
-  document.body.appendChild(link);
-  link.click();
-  setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 500);
-});
+/* Chrome and Edge take the Save-as-PDF filename from document.title. */
+function exportPdf() {
+  const base = document.title;
+  document.title = base + " " + lastCfg.effect.toFixed(2) + " difference, alpha " +
+    lastCfg.alpha.toFixed(2) + ", " + Math.round(lastCfg.targetPower * 100) + " percent power";
+  const restore = () => {
+    document.title = base;
+    window.removeEventListener("afterprint", restore);
+  };
+  window.addEventListener("afterprint", restore);
+  window.print();
+  setTimeout(restore, 10000);
+}
+
+$("btnPdf").addEventListener("click", exportPdf);
+$("btnPdfTable").addEventListener("click", exportPdf);
 
 $("btnShare").addEventListener("click", evt => {
   writeState();
